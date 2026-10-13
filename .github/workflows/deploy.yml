@@ -1,0 +1,46 @@
+
+name: Blue-Green Deployment
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "Dockerfile"
+      - "index.html"
+      - "index-blue.html"
+      - "deploy.sh"
+      - ".github/workflows/deploy.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: blue-green-deployment
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate deployment script
+        run: bash -n deploy.sh
+
+      - name: Deploy through SSH
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/blue_green_deploy
+          chmod 600 ~/.ssh/blue_green_deploy
+          ssh-keyscan -H localhost >> ~/.ssh/known_hosts
+          ssh -i ~/.ssh/blue_green_deploy \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            "$USER@localhost" \
+            'cd "$HOME/blue-green-deployment" && bash -n deploy.sh'
