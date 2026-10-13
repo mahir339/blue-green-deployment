@@ -30,6 +30,7 @@ jobs:
       - name: Validate deployment script
         run: bash -n deploy.sh
 
+
       
       - name: Validate SSH secret
         env:
@@ -38,7 +39,7 @@ jobs:
           set -euo pipefail
 
           if [ -z "$DEPLOY_KEY_B64" ]; then
-            echo "ERROR: DEPLOY_SSH_PRIVATE_KEY_B64 is empty or missing."
+            echo "ERROR: DEPLOY_SSH_PRIVATE_KEY_B64 is missing or empty."
             exit 1
           fi
 
@@ -46,11 +47,11 @@ jobs:
           chmod 600 /tmp/deploy_key
 
           if ! ssh-keygen -y -f /tmp/deploy_key > /dev/null; then
-            echo "ERROR: Secret did not decode to a valid SSH private key."
+            echo "ERROR: The secret does not decode to a valid SSH private key."
             rm -f /tmp/deploy_key
             exit 1
           fi
 
-          echo "SSH private key format is valid."
           rm -f /tmp/deploy_key
+          echo "SUCCESS: SSH private key format is valid."
 
