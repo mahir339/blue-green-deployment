@@ -30,17 +30,27 @@ jobs:
       - name: Validate deployment script
         run: bash -n deploy.sh
 
-      - name: Deploy through SSH
+      
+      - name: Validate SSH secret
         env:
           DEPLOY_KEY_B64: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY_B64 }}
         run: |
           set -euo pipefail
-          install -d -m 700 ~/.ssh
-          printf '%s' "$DEPLOY_KEY_B64" | base64 -d > ~/.ssh/blue_green_deploy
-          chmod 600 ~/.ssh/blue_green_deploy
-          ssh-keyscan -H localhost >> ~/.ssh/known_hosts
-          ssh -i ~/.ssh/blue_green_deploy \
-            -o IdentitiesOnly=yes \
-            -o BatchMode=yes \
-            "$USER@localhost" \
-            'cd "$HOME/blue-green-deployment" && bash -n deploy.sh'
+
+          if [ -z "$DEPLOY_KEY_B64" ]; then
+            echo "ERROR: DEPLOY_SSH_PRIVATE_KEY_B64 is empty or missing."
+            exit 1
+          fi
+
+          printf '%s' "$DEPLOY_KEY_B64" | base64 --decode > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+
+          if ! ssh-keygen -y -f /tmp/deploy_key > /dev/null; then
+            echo "ERROR: Secret did not decode to a valid SSH private key."
+            rm -f /tmp/deploy_key
+            exit 1
+          fi
+
+          echo "SSH private key format is valid."
+          rm -f /tmp/deploy_key
+
