@@ -32,11 +32,11 @@ jobs:
 
       - name: Deploy through SSH
         env:
-          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_KEY_B64: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY_B64 }}
         run: |
           set -euo pipefail
           install -d -m 700 ~/.ssh
-          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/blue_green_deploy
+          printf '%s' "$DEPLOY_KEY_B64" | base64 -d > ~/.ssh/blue_green_deploy
           chmod 600 ~/.ssh/blue_green_deploy
           ssh-keyscan -H localhost >> ~/.ssh/known_hosts
           ssh -i ~/.ssh/blue_green_deploy \
