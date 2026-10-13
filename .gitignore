@@ -2,3 +2,4 @@ deploy.log
 deployment.state
 deployment.state.tmp
 *.backup
+actions-runner/
