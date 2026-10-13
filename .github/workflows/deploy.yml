@@ -55,3 +55,23 @@ jobs:
           rm -f /tmp/deploy_key
           echo "SUCCESS: SSH private key format is valid."
 
+      - name: Test SSH connection
+        env:
+          DEPLOY_KEY_B64: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY_B64 }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          printf '%s' "$DEPLOY_KEY_B64" | base64 --decode > ~/.ssh/blue_green_deploy
+          chmod 600 ~/.ssh/blue_green_deploy
+
+          ssh-keyscan -H localhost >> ~/.ssh/known_hosts 2>/dev/null
+
+          ssh -i ~/.ssh/blue_green_deploy \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            mahir@localhost \
+            'whoami'
+
