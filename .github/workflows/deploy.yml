@@ -18,6 +18,8 @@ on:
       - "Dockerfile"
       - "index.html"
       - "index-blue.html"
+      - "deploy.sh"
+      - ".github/workflows/deploy.yml"
 
 permissions:
   contents: read
