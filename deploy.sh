@@ -2,7 +2,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-PROJECT_DIR="$HOME/blue-green-deployment"
+PROJECT_DIR="/home/mahir/blue-green-deployment"
 LOG_FILE="$PROJECT_DIR/deploy.log"
 
 mkdir -p "$PROJECT_DIR"
@@ -17,12 +17,12 @@ log() {
 get_active_green_port() {
     local running port
 
-    if ! sudo docker inspect green >/dev/null 2>&1; then
+    if ! docker inspect green >/dev/null 2>&1; then
         log "ERROR: Green container does not exist."
         return 1
     fi
 
-    running=$(sudo docker inspect \
+    running=$(docker inspect \
         --format '{{.State.Running}}' green)
 
     if [[ "$running" != "true" ]]; then
@@ -30,7 +30,7 @@ get_active_green_port() {
         return 1
     fi
 
-    port=$(sudo docker inspect \
+    port=$(docker inspect \
         --format '{{with index .NetworkSettings.Ports "80/tcp"}}{{if .}}{{(index . 0).HostPort}}{{end}}{{end}}' \
         green)
 
@@ -49,8 +49,8 @@ find_available_port() {
     while (( attempts < 101 )); do
         port=$(shuf -i 2000-2100 -n 1)
 
-        if ! sudo ss -H -ltn "( sport = :$port )" | grep -q . &&
-           ! sudo docker ps --filter "publish=$port" \
+        if ! ss -H -ltn "( sport = :$port )" | grep -q . &&
+           ! docker ps --filter "publish=$port" \
                --format '{{.ID}}' | grep -q .; then
             log "Available port selected: $port"
             printf '%s\n' "$port"
@@ -92,71 +92,18 @@ check_health() {
 switch_traffic() {
     local new_port="$1"
     local expected_version="$2"
-    local upstream_file="/etc/nginx/conf.d/blue-green-upstream.conf"
-    local backup_file="/tmp/blue-green-upstream.backup.$$"
-    local attempt
 
-    log "Preparing to switch traffic to $expected_version on port $new_port"
+    log "Requesting verified Nginx switch to $expected_version on port $new_port"
 
-    # Save the currently active upstream configuration.
-    if ! sudo cp "$upstream_file" "$backup_file"; then
-        log "ERROR: Could not back up the Nginx configuration."
-        return 1
+    if sudo -n /usr/local/sbin/blue-green-nginx-switch "$new_port" "$expected_version"; then
+        log "SUCCESS: Nginx traffic switch verified."
+        return 0
     fi
 
-    # Point Nginx to the incoming container.
-    if ! printf 'upstream blue_green_app {\n    server 127.0.0.1:%s;\n}\n' "$new_port" |
-         sudo tee "$upstream_file" >/dev/null; then
-        sudo cp "$backup_file" "$upstream_file"
-        sudo rm -f "$backup_file"
-        log "ERROR: Could not update upstream configuration."
-        return 1
-    fi
-
-    # Validate before reloading Nginx.
-    if ! sudo nginx -t; then
-        log "ERROR: Nginx validation failed. Restoring previous configuration."
-        sudo cp "$backup_file" "$upstream_file"
-        sudo nginx -t && sudo systemctl reload nginx
-        sudo rm -f "$backup_file"
-        return 1
-    fi
-
-    # Reload Nginx with the new upstream.
-    if ! sudo systemctl reload nginx; then
-        log "ERROR: Nginx reload failed. Restoring previous configuration."
-        sudo cp "$backup_file" "$upstream_file"
-        sudo nginx -t && sudo systemctl reload nginx
-        sudo rm -f "$backup_file"
-        return 1
-    fi
-
-    # Verify that requests through Nginx reach the expected version.
-    for attempt in {1..5}; do
-        if curl -fsS --max-time 3 http://127.0.0.1/ 2>/dev/null |
-           grep -Fq "Version: $expected_version"; then
-            log "SUCCESS: Nginx is serving $expected_version on port $new_port."
-            sudo rm -f "$backup_file"
-            return 0
-        fi
-
-        log "Verification attempt $attempt/5 failed."
-        sleep 2
-    done
-
-    # Roll back if the new version is not served correctly.
-    log "ERROR: Traffic verification failed. Rolling back to the previous upstream."
-    sudo cp "$backup_file" "$upstream_file"
-
-    if sudo nginx -t && sudo systemctl reload nginx; then
-        log "Rollback completed. Previous upstream restored."
-    else
-        log "CRITICAL: Automatic rollback reload failed. Check Nginx immediately."
-    fi
-
-    sudo rm -f "$backup_file"
+    log "ERROR: Nginx switch failed; the helper attempted to restore the previous upstream."
     return 1
 }
+
 get_deployment_state() {
     local state_file="$PROJECT_DIR/deployment.state"
 
@@ -231,13 +178,13 @@ deploy_version() {
     new_port=$(find_available_port) || return 1
 
     # Remove only a stale candidate from an earlier attempt.
-    if sudo docker inspect "$candidate" >/dev/null 2>&1; then
+    if docker inspect "$candidate" >/dev/null 2>&1; then
         log "Removing stale candidate container $candidate"
-        sudo docker rm -f "$candidate" || return 1
+        docker rm -f "$candidate" || return 1
     fi
 
     # Start the incoming container without touching active traffic.
-    if ! sudo docker run -d \
+    if ! docker run -d \
         --name "$candidate" \
         --restart unless-stopped \
         -p "$new_port:80" \
@@ -251,22 +198,22 @@ deploy_version() {
     # Check the incoming application before switching traffic.
     if ! check_health "$new_port" "$expected_version"; then
         log "ERROR: Health check failed; removing incoming container."
-        sudo docker rm -f "$candidate"
+        docker rm -f "$candidate"
         return 1
     fi
 
     # Replace the old inactive slot only after the candidate is healthy.
-    if sudo docker inspect "$inactive_slot" >/dev/null 2>&1; then
-        if ! sudo docker rm -f "$inactive_slot"; then
+    if docker inspect "$inactive_slot" >/dev/null 2>&1; then
+        if ! docker rm -f "$inactive_slot"; then
             log "ERROR: Could not replace the inactive slot."
-            sudo docker rm -f "$candidate"
+            docker rm -f "$candidate"
             return 1
         fi
     fi
 
-    if ! sudo docker rename "$candidate" "$inactive_slot"; then
+    if ! docker rename "$candidate" "$inactive_slot"; then
         log "ERROR: Could not promote the candidate container."
-        sudo docker rm -f "$candidate"
+        docker rm -f "$candidate"
         return 1
     fi
 
@@ -274,7 +221,7 @@ deploy_version() {
     # upstream if validation, reload, or verification fails.
     if ! switch_traffic "$new_port" "$expected_version"; then
         log "ERROR: Traffic switch failed; preserving the old active slot."
-        sudo docker rm -f "$inactive_slot"
+        docker rm -f "$inactive_slot"
         return 1
     fi
 
@@ -289,7 +236,7 @@ deploy_version() {
         old_version=$(printf '%s' "$active_slot" | tr '[:lower:]' '[:upper:]')
 
         if switch_traffic "$active_port" "$old_version"; then
-            sudo docker rm -f "$inactive_slot"
+            docker rm -f "$inactive_slot"
             rm -f "$temp_state"
             log "Previous active slot restored."
         else
@@ -304,7 +251,7 @@ deploy_version() {
 
     # Remove the previous active container only after the new deployment
     # has passed the health check and Nginx verification.
-    if sudo docker rm -f "$active_slot"; then
+    if docker rm -f "$active_slot"; then
         log "Removed previous container: $active_slot"
     else
         log "WARNING: Previous container cleanup failed."
@@ -312,3 +259,9 @@ deploy_version() {
 
     log "Deployment completed successfully."
 }
+
+# DEPLOY_ENTRY_POINT
+# Default to the existing GREEN image for the initial test.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    deploy_version "${DEPLOY_IMAGE:-blue-green-app:v1}" "${DEPLOY_VERSION:-GREEN}"
+fi

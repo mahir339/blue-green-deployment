@@ -1,8 +1,16 @@
-
 name: Blue-Green Deployment
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: Application version to deploy
+        type: choice
+        required: true
+        default: BLUE
+        options:
+          - BLUE
+          - GREEN
   push:
     branches:
       - main
@@ -10,8 +18,6 @@ on:
       - "Dockerfile"
       - "index.html"
       - "index-blue.html"
-      - "deploy.sh"
-      - ".github/workflows/deploy.yml"
 
 permissions:
   contents: read
@@ -23,6 +29,8 @@ concurrency:
 jobs:
   deploy:
     runs-on: self-hosted
+    env:
+      DEPLOY_VERSION: ${{ inputs.version || 'GREEN' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -30,48 +38,53 @@ jobs:
       - name: Validate deployment script
         run: bash -n deploy.sh
 
-
-      
       - name: Validate SSH secret
         env:
           DEPLOY_KEY_B64: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY_B64 }}
         run: |
           set -euo pipefail
-
-          if [ -z "$DEPLOY_KEY_B64" ]; then
-            echo "ERROR: DEPLOY_SSH_PRIVATE_KEY_B64 is missing or empty."
+          test -n "$DEPLOY_KEY_B64" || {
+            echo "SSH secret is missing."
             exit 1
-          fi
-
+          }
           printf '%s' "$DEPLOY_KEY_B64" | base64 --decode > /tmp/deploy_key
           chmod 600 /tmp/deploy_key
+          ssh-keygen -y -f /tmp/deploy_key >/dev/null
+          rm -f /tmp/deploy_key
+          echo "SSH private key format is valid."
 
-          if ! ssh-keygen -y -f /tmp/deploy_key > /dev/null; then
-            echo "ERROR: The secret does not decode to a valid SSH private key."
-            rm -f /tmp/deploy_key
-            exit 1
+      - name: Build selected application image
+        run: |
+          set -euo pipefail
+          build_context="$(mktemp -d)"
+          trap 'rm -rf "$build_context"' EXIT
+          cp Dockerfile "$build_context/Dockerfile"
+
+          if [ "$DEPLOY_VERSION" = "BLUE" ]; then
+            cp index-blue.html "$build_context/index.html"
+          else
+            cp index.html "$build_context/index.html"
           fi
 
-          rm -f /tmp/deploy_key
-          echo "SUCCESS: SSH private key format is valid."
+          docker build -t blue-green-app:incoming "$build_context"
 
-      - name: Test SSH connection
+      - name: Deploy through existing SSH connection
         env:
           DEPLOY_KEY_B64: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY_B64 }}
         run: |
           set -euo pipefail
-
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-
           printf '%s' "$DEPLOY_KEY_B64" | base64 --decode > ~/.ssh/blue_green_deploy
           chmod 600 ~/.ssh/blue_green_deploy
-
+          touch ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
           ssh-keyscan -H localhost >> ~/.ssh/known_hosts 2>/dev/null
 
           ssh -i ~/.ssh/blue_green_deploy \
             -o IdentitiesOnly=yes \
             -o BatchMode=yes \
             mahir@localhost \
-            'whoami'
+            "DEPLOY_IMAGE=blue-green-app:incoming DEPLOY_VERSION='$DEPLOY_VERSION' bash '$GITHUB_WORKSPACE/deploy.sh'"
 
+          rm -f ~/.ssh/blue_green_deploy
